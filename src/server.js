@@ -58,12 +58,20 @@ function normalizeAmount(rawAmount, currency) {
       return null;
     }
 
-    const parsed = Number(amountText);
+    const sanitizedAmountText = amountText
+      .replace(/,/g, "")
+      .replace(/[^0-9.\-]/g, "");
+
+    if (!sanitizedAmountText || sanitizedAmountText === "." || sanitizedAmountText === "-") {
+      return null;
+    }
+
+    const parsed = Number(sanitizedAmountText);
     if (!Number.isFinite(parsed) || parsed <= 0) {
       return null;
     }
 
-    if (/^\d+$/.test(amountText)) {
+    if (/^\d+$/.test(sanitizedAmountText)) {
       return parsed;
     }
 
@@ -71,6 +79,47 @@ function normalizeAmount(rawAmount, currency) {
   }
 
   return null;
+}
+
+function normalizeMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {};
+  }
+
+  const entries = Object.entries(metadata).slice(0, 50);
+
+  return entries.reduce((result, [key, value]) => {
+    if (!key) {
+      return result;
+    }
+
+    const normalizedKey = String(key).slice(0, 40);
+
+    if (value === null || value === undefined) {
+      return result;
+    }
+
+    if (typeof value === "object") {
+      result[normalizedKey] = JSON.stringify(value).slice(0, 500);
+      return result;
+    }
+
+    result[normalizedKey] = String(value).slice(0, 500);
+    return result;
+  }, {});
+}
+
+function normalizeStripeCustomerId(customerId) {
+  if (!customerId) {
+    return null;
+  }
+
+  const normalizedCustomerId = String(customerId).trim();
+  if (!normalizedCustomerId.startsWith("cus_")) {
+    return null;
+  }
+
+  return normalizedCustomerId;
 }
 
 if (!STRIPE_SECRET_KEY) {
@@ -188,10 +237,12 @@ app.post("/api/payments/create-intent", async (req, res) => {
     const { amount, currency = "usd", metadata = {}, customerId } = req.body || {};
     const normalizedCurrency = String(currency).toLowerCase();
     const normalizedAmount = normalizeAmount(amount, normalizedCurrency);
+    const normalizedMetadata = normalizeMetadata(metadata);
+    const normalizedCustomerId = normalizeStripeCustomerId(customerId);
 
     if (!Number.isInteger(normalizedAmount) || normalizedAmount <= 0) {
       return res.status(400).json({
-        error: "Invalid amount. Send positive number (minor units or decimal major units)."
+        error: "Invalid amount. Send a positive amount like 1500, 15.00, or LKR 51,000.00."
       });
     }
 
@@ -199,11 +250,11 @@ app.post("/api/payments/create-intent", async (req, res) => {
       amount: normalizedAmount,
       currency: normalizedCurrency,
       automatic_payment_methods: { enabled: true },
-      metadata
+      metadata: normalizedMetadata
     };
 
-    if (customerId) {
-      params.customer = String(customerId);
+    if (normalizedCustomerId) {
+      params.customer = normalizedCustomerId;
     }
 
     const intent = await stripe.paymentIntents.create(params);
