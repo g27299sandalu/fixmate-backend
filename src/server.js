@@ -143,44 +143,6 @@ function extractPaymentIntentId(value) {
   return "";
 }
 
-function buildPaymentResultPayload({
-  paymentIntentId = "",
-  clientSecret = "",
-  status = "",
-  method = "card",
-  amount = null,
-  currency = "",
-  success = false
-}) {
-  const normalizedPaymentIntentId = paymentIntentId || "";
-  const normalizedClientSecret = clientSecret || "";
-  const normalizedStatus = status || "";
-  const shouldNavigateToSuccess = success;
-  const paymentStatus = success ? "COMPLETED" : "PENDING";
-  const bookingStatus = success ? "COMPLETED" : "IN_PROGRESS";
-
-  return {
-    success,
-    isSuccess: success,
-    shouldNavigateToSuccess,
-    should_navigate_to_success: shouldNavigateToSuccess,
-    nextScreen: shouldNavigateToSuccess ? "payment_success" : "payment_pending",
-    next_screen: shouldNavigateToSuccess ? "payment_success" : "payment_pending",
-    paymentStatus,
-    payment_status: paymentStatus,
-    bookingStatus,
-    booking_status: bookingStatus,
-    method,
-    amount,
-    currency,
-    paymentIntentId: normalizedPaymentIntentId,
-    payment_intent_id: normalizedPaymentIntentId,
-    clientSecret: normalizedClientSecret,
-    client_secret: normalizedClientSecret,
-    status: normalizedStatus
-  };
-}
-
 if (!STRIPE_SECRET_KEY) {
   console.error("Missing STRIPE_SECRET_KEY environment variable.");
   process.exit(1);
@@ -371,28 +333,21 @@ app.post("/api/payments/confirm", async (req, res) => {
     if (!resolvedPaymentIntentId) {
       return res.status(400).json({
         error: "paymentIntentId or clientSecret is required",
-        ...buildPaymentResultPayload({
-          success: false,
-          status: ""
-        })
+        paymentIntentId: "",
+        payment_intent_id: "",
+        status: ""
       });
     }
 
     const existingIntent = await stripe.paymentIntents.retrieve(String(resolvedPaymentIntentId));
 
     if (["succeeded", "processing", "requires_capture"].includes(existingIntent.status)) {
-      const isSuccessfulStatus = ["succeeded", "processing", "requires_capture"].includes(existingIntent.status);
-
       return res.status(200).json({
-        ...buildPaymentResultPayload({
-          paymentIntentId: existingIntent.id || "",
-          clientSecret: existingIntent.client_secret || "",
-          status: existingIntent.status || "",
-          method: "card",
-          amount: existingIntent.amount ?? null,
-          currency: existingIntent.currency || "",
-          success: isSuccessfulStatus
-        })
+        paymentIntentId: existingIntent.id || "",
+        payment_intent_id: existingIntent.id || "",
+        status: existingIntent.status || "",
+        clientSecret: existingIntent.client_secret || "",
+        client_secret: existingIntent.client_secret || ""
       });
     }
 
@@ -405,29 +360,21 @@ app.post("/api/payments/confirm", async (req, res) => {
       const intent = await stripe.paymentIntents.confirm(String(resolvedPaymentIntentId), params);
 
       return res.status(200).json({
-        ...buildPaymentResultPayload({
-          paymentIntentId: intent.id || "",
-          clientSecret: intent.client_secret || "",
-          status: intent.status || "",
-          method: "card",
-          amount: intent.amount ?? null,
-          currency: intent.currency || "",
-          success: ["succeeded", "processing", "requires_capture"].includes(intent.status)
-        })
+        paymentIntentId: intent.id || "",
+        payment_intent_id: intent.id || "",
+        status: intent.status || "",
+        clientSecret: intent.client_secret || "",
+        client_secret: intent.client_secret || ""
       });
     }
 
     return res.status(400).json({
       error: "Payment intent is not ready for confirmation",
-      ...buildPaymentResultPayload({
-        paymentIntentId: existingIntent.id || "",
-        clientSecret: existingIntent.client_secret || "",
-        status: existingIntent.status || "",
-        method: "card",
-        amount: existingIntent.amount ?? null,
-        currency: existingIntent.currency || "",
-        success: false
-      })
+      paymentIntentId: existingIntent.id || "",
+      payment_intent_id: existingIntent.id || "",
+      status: existingIntent.status || "",
+      clientSecret: existingIntent.client_secret || "",
+      client_secret: existingIntent.client_secret || ""
     });
   } catch (error) {
     const statusCode =
@@ -440,10 +387,9 @@ app.post("/api/payments/confirm", async (req, res) => {
       message: error.message || "Unknown confirmation error",
       code: error.code || null,
       type: error.type || null,
-      ...buildPaymentResultPayload({
-        success: false,
-        status: ""
-      })
+      paymentIntentId: "",
+      payment_intent_id: "",
+      status: ""
     });
   }
 });
@@ -455,25 +401,15 @@ app.post("/api/payments/cash", (req, res) => {
 
   if (!Number.isInteger(normalizedAmount) || normalizedAmount <= 0) {
     return res.status(400).json({
-      error: "Invalid amount. Send positive number (minor units or decimal major units).",
-      ...buildPaymentResultPayload({
-        method: "cash",
-        amount: normalizedAmount,
-        currency: normalizedCurrency,
-        success: false,
-        status: ""
-      })
+      error: "Invalid amount. Send positive number (minor units or decimal major units)."
     });
   }
 
   return res.status(201).json({
-    ...buildPaymentResultPayload({
-      method: "cash",
-      amount: normalizedAmount,
-      currency: normalizedCurrency,
-      success: true,
-      status: "succeeded"
-    }),
+    method: "cash",
+    status: "pending_collection",
+    amount: normalizedAmount,
+    currency: normalizedCurrency,
     jobId: jobId || null,
     customerId: customerId || null,
     note: String(note)
