@@ -14,6 +14,8 @@ const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const RATE_LIMIT_WINDOW_MINUTES = Number(process.env.RATE_LIMIT_WINDOW_MINUTES) || 15;
 const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS) || 100;
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
+const FIREBASE_SERVICE_ACCOUNT_JSON = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
 const ZERO_DECIMAL_CURRENCIES = new Set([
   "bif",
@@ -160,6 +162,131 @@ function isSuccessfulStripeStatus(stripeStatus) {
   return ["succeeded", "processing", "requires_capture"].includes(stripeStatus);
 }
 
+let firebaseAdmin = null;
+let firestoreDb = undefined;
+
+function resolveFirebaseServiceAccount() {
+  if (FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      return JSON.parse(FIREBASE_SERVICE_ACCOUNT_JSON);
+    } catch (error) {
+      console.error("FIREBASE_SERVICE_ACCOUNT_JSON is invalid JSON");
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function getFirestore() {
+  if (firestoreDb !== undefined) {
+    return firestoreDb;
+  }
+
+  try {
+    firebaseAdmin = require("firebase-admin");
+  } catch (error) {
+    console.warn("firebase-admin dependency is not installed. Booking sync disabled.");
+    firestoreDb = null;
+    return firestoreDb;
+  }
+
+  try {
+    if (!firebaseAdmin.apps.length) {
+      const serviceAccount = resolveFirebaseServiceAccount();
+      if (!serviceAccount) {
+        console.warn("Firebase credentials are missing. Booking sync disabled.");
+        firestoreDb = null;
+        return firestoreDb;
+      }
+
+      firebaseAdmin.initializeApp({
+        credential: firebaseAdmin.credential.cert(serviceAccount),
+        projectId: FIREBASE_PROJECT_ID || serviceAccount.project_id
+      });
+    }
+
+    firestoreDb = firebaseAdmin.firestore();
+    return firestoreDb;
+  } catch (error) {
+    console.error("Failed to initialize Firebase Admin", error.message);
+    firestoreDb = null;
+    return firestoreDb;
+  }
+}
+
+async function syncPaymentToFirestore({
+  bookingId,
+  paymentId,
+  paymentIntentId,
+  amount,
+  currency,
+  method,
+  customerId,
+  providerId,
+  paymentStatus,
+  bookingStatus
+}) {
+  if (!bookingId) {
+    return {
+      updated: false,
+      reason: "Missing bookingId"
+    };
+  }
+
+  const db = getFirestore();
+  if (!db || !firebaseAdmin) {
+    return {
+      updated: false,
+      reason: "Firestore is not configured"
+    };
+  }
+
+  const timestamp = firebaseAdmin.firestore.FieldValue.serverTimestamp();
+  const safePaymentId = paymentId || paymentIntentId || `pay_${Date.now()}`;
+
+  const bookingUpdate = {
+    status: bookingStatus,
+    bookingStatus,
+    paymentStatus,
+    paymentMethod: method,
+    paymentId: safePaymentId,
+    paymentIntentId: paymentIntentId || "",
+    updatedAt: timestamp,
+    paidAt: timestamp
+  };
+
+  if (customerId) {
+    bookingUpdate.customerId = customerId;
+  }
+  if (providerId) {
+    bookingUpdate.providerId = providerId;
+  }
+
+  const paymentRecord = {
+    id: safePaymentId,
+    bookingId,
+    customerId: customerId || "",
+    providerId: providerId || "",
+    amount: Number(amount) || 0,
+    currency: String(currency || "lkr").toUpperCase(),
+    paymentMethod: method,
+    status: paymentStatus,
+    transactionId: paymentIntentId || safePaymentId,
+    processedAt: Date.now(),
+    updatedAt: timestamp,
+    createdAt: timestamp
+  };
+
+  await db.collection("bookings").doc(String(bookingId)).set(bookingUpdate, { merge: true });
+  await db.collection("payments").doc(String(safePaymentId)).set(paymentRecord, { merge: true });
+
+  return {
+    updated: true,
+    paymentId: safePaymentId
+  };
+}
+
 if (!STRIPE_SECRET_KEY) {
   console.error("Missing STRIPE_SECRET_KEY environment variable.");
   process.exit(1);
@@ -250,11 +377,14 @@ app.post(
 app.use(express.json());
 
 app.get("/health", (req, res) => {
+  const firestoreReady = Boolean(getFirestore());
+
   res.status(200).json({
     status: "OK",
     message: "FixMate Payment Backend is running",
     timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV || "development"
+    env: process.env.NODE_ENV || "development",
+    firestore: firestoreReady ? "connected" : "not-configured"
   });
 });
 
@@ -275,7 +405,14 @@ app.get("/api/payments/config", (req, res) => {
 
 app.post("/api/payments/create-intent", async (req, res) => {
   try {
-    const { amount, currency = "usd", metadata = {}, customerId, bookingId } = req.body || {};
+    const {
+      amount,
+      currency = "usd",
+      metadata = {},
+      customerId,
+      providerId,
+      bookingId
+    } = req.body || {};
     const normalizedCurrency = String(currency).toLowerCase();
     const normalizedAmount = normalizeAmount(amount, normalizedCurrency);
     const normalizedMetadata = normalizeMetadata(metadata);
@@ -287,11 +424,18 @@ app.post("/api/payments/create-intent", async (req, res) => {
       });
     }
 
+    const metadataWithBooking = {
+      ...normalizedMetadata,
+      bookingId: bookingId || normalizedMetadata.bookingId || "",
+      customerId: customerId || normalizedMetadata.customerId || "",
+      providerId: providerId || normalizedMetadata.providerId || ""
+    };
+
     const params = {
       amount: normalizedAmount,
       currency: normalizedCurrency,
       automatic_payment_methods: { enabled: true },
-      metadata: normalizedMetadata
+      metadata: normalizeMetadata(metadataWithBooking)
     };
 
     if (normalizedCustomerId) {
@@ -354,7 +498,9 @@ app.post("/api/payments/confirm", async (req, res) => {
       clientSecret,
       client_secret,
       paymentMethodId,
-      bookingId
+      bookingId,
+      customerId,
+      providerId
     } = req.body || {};
     const resolvedPaymentIntentId =
       extractPaymentIntentId(paymentIntentId) ||
@@ -380,6 +526,21 @@ app.post("/api/payments/confirm", async (req, res) => {
 
     if (isSuccessfulStripeStatus(existingIntent.status)) {
       const mappedPaymentStatus = toAppPaymentStatus(existingIntent.status);
+      const resolvedBookingId = bookingId || existingIntent.metadata.bookingId || "";
+      const resolvedCustomerId = customerId || existingIntent.metadata.customerId || "";
+      const resolvedProviderId = providerId || existingIntent.metadata.providerId || "";
+      const syncResult = await syncPaymentToFirestore({
+        bookingId: resolvedBookingId,
+        paymentId: existingIntent.id,
+        paymentIntentId: existingIntent.id,
+        amount: existingIntent.amount,
+        currency: existingIntent.currency,
+        method: "STRIPE_CARD",
+        customerId: resolvedCustomerId,
+        providerId: resolvedProviderId,
+        paymentStatus: mappedPaymentStatus,
+        bookingStatus: "COMPLETED"
+      });
 
       return res.status(200).json({
         success: true,
@@ -389,9 +550,11 @@ app.post("/api/payments/confirm", async (req, res) => {
         status: existingIntent.status || "",
         paymentStatus: mappedPaymentStatus,
         bookingStatus: "COMPLETED",
-        bookingId: bookingId || "",
+        bookingId: resolvedBookingId,
         clientSecret: existingIntent.client_secret || "",
-        client_secret: existingIntent.client_secret || ""
+        client_secret: existingIntent.client_secret || "",
+        syncedToDatabase: syncResult.updated,
+        syncReason: syncResult.reason || ""
       });
     }
 
@@ -404,6 +567,23 @@ app.post("/api/payments/confirm", async (req, res) => {
       const intent = await stripe.paymentIntents.confirm(String(resolvedPaymentIntentId), params);
       const confirmedSuccessfully = isSuccessfulStripeStatus(intent.status);
       const mappedPaymentStatus = toAppPaymentStatus(intent.status);
+      const resolvedBookingId = bookingId || intent.metadata.bookingId || "";
+      const resolvedCustomerId = customerId || intent.metadata.customerId || "";
+      const resolvedProviderId = providerId || intent.metadata.providerId || "";
+      const syncResult = confirmedSuccessfully
+        ? await syncPaymentToFirestore({
+          bookingId: resolvedBookingId,
+          paymentId: intent.id,
+          paymentIntentId: intent.id,
+          amount: intent.amount,
+          currency: intent.currency,
+          method: "STRIPE_CARD",
+          customerId: resolvedCustomerId,
+          providerId: resolvedProviderId,
+          paymentStatus: mappedPaymentStatus,
+          bookingStatus: "COMPLETED"
+        })
+        : { updated: false, reason: "Payment is not in a completed state" };
 
       return res.status(200).json({
         success: confirmedSuccessfully,
@@ -415,9 +595,11 @@ app.post("/api/payments/confirm", async (req, res) => {
         status: intent.status || "",
         paymentStatus: mappedPaymentStatus,
         bookingStatus: confirmedSuccessfully ? "COMPLETED" : "PAYMENT_PENDING",
-        bookingId: bookingId || "",
+        bookingId: resolvedBookingId,
         clientSecret: intent.client_secret || "",
-        client_secret: intent.client_secret || ""
+        client_secret: intent.client_secret || "",
+        syncedToDatabase: syncResult.updated,
+        syncReason: syncResult.reason || ""
       });
     }
 
@@ -456,7 +638,7 @@ app.post("/api/payments/confirm", async (req, res) => {
 });
 
 app.post("/api/payments/cash", (req, res) => {
-  const { amount, currency = "usd", jobId, bookingId, customerId, note = "" } = req.body || {};
+  const { amount, currency = "usd", jobId, bookingId, customerId, providerId, note = "" } = req.body || {};
   const normalizedCurrency = String(currency).toLowerCase();
   const normalizedAmount = normalizeAmount(amount, normalizedCurrency);
 
@@ -472,22 +654,47 @@ app.post("/api/payments/cash", (req, res) => {
 
   const cashPaymentId = `cash_${Date.now()}`;
 
-  return res.status(201).json({
-    success: true,
-    message: "Cash payment recorded successfully",
-    paymentId: cashPaymentId,
-    payment_id: cashPaymentId,
-    paymentStatus: "COMPLETED",
-    bookingStatus: "COMPLETED",
+  syncPaymentToFirestore({
     bookingId: bookingId || "",
-    method: "cash",
-    status: "pending_collection",
+    paymentId: cashPaymentId,
+    paymentIntentId: "",
     amount: normalizedAmount,
     currency: normalizedCurrency,
-    jobId: jobId || null,
-    customerId: customerId || null,
-    note: String(note)
-  });
+    method: "CASH",
+    customerId: customerId || "",
+    providerId: providerId || "",
+    paymentStatus: "COMPLETED",
+    bookingStatus: "COMPLETED"
+  })
+    .then((syncResult) => {
+      return res.status(201).json({
+        success: true,
+        message: "Cash payment recorded successfully",
+        paymentId: cashPaymentId,
+        payment_id: cashPaymentId,
+        paymentStatus: "COMPLETED",
+        bookingStatus: "COMPLETED",
+        bookingId: bookingId || "",
+        method: "cash",
+        status: "pending_collection",
+        amount: normalizedAmount,
+        currency: normalizedCurrency,
+        jobId: jobId || null,
+        customerId: customerId || null,
+        note: String(note),
+        syncedToDatabase: syncResult.updated,
+        syncReason: syncResult.reason || ""
+      });
+    })
+    .catch((error) => {
+      return res.status(500).json({
+        success: false,
+        error: "Failed to sync cash payment",
+        message: error.message || "Failed to sync cash payment",
+        paymentStatus: "FAILED",
+        bookingStatus: "PAYMENT_PENDING"
+      });
+    });
 });
 
 app.use((error, req, res, next) => {
