@@ -122,6 +122,27 @@ function normalizeStripeCustomerId(customerId) {
   return normalizedCustomerId;
 }
 
+function extractPaymentIntentId(value) {
+  if (!value) {
+    return "";
+  }
+
+  const rawValue = String(value).trim();
+  if (!rawValue) {
+    return "";
+  }
+
+  if (rawValue.startsWith("pi_") && rawValue.includes("_secret_")) {
+    return rawValue.split("_secret_")[0];
+  }
+
+  if (rawValue.startsWith("pi_")) {
+    return rawValue;
+  }
+
+  return "";
+}
+
 if (!STRIPE_SECRET_KEY) {
   console.error("Missing STRIPE_SECRET_KEY environment variable.");
   process.exit(1);
@@ -302,11 +323,31 @@ app.post("/api/payments/create-intent", async (req, res) => {
 
 app.post("/api/payments/confirm", async (req, res) => {
   try {
-    const { paymentIntentId, paymentMethodId } = req.body || {};
+    const { paymentIntentId, payment_intent_id, clientSecret, client_secret, paymentMethodId } = req.body || {};
+    const resolvedPaymentIntentId =
+      extractPaymentIntentId(paymentIntentId) ||
+      extractPaymentIntentId(payment_intent_id) ||
+      extractPaymentIntentId(clientSecret) ||
+      extractPaymentIntentId(client_secret);
 
-    if (!paymentIntentId) {
+    if (!resolvedPaymentIntentId) {
       return res.status(400).json({
-        error: "paymentIntentId is required"
+        error: "paymentIntentId or clientSecret is required",
+        paymentIntentId: "",
+        payment_intent_id: "",
+        status: ""
+      });
+    }
+
+    const existingIntent = await stripe.paymentIntents.retrieve(String(resolvedPaymentIntentId));
+
+    if (["succeeded", "processing", "requires_capture"].includes(existingIntent.status)) {
+      return res.status(200).json({
+        paymentIntentId: existingIntent.id || "",
+        payment_intent_id: existingIntent.id || "",
+        status: existingIntent.status || "",
+        clientSecret: existingIntent.client_secret || "",
+        client_secret: existingIntent.client_secret || ""
       });
     }
 
@@ -315,11 +356,25 @@ app.post("/api/payments/confirm", async (req, res) => {
       params.payment_method = String(paymentMethodId);
     }
 
-    const intent = await stripe.paymentIntents.confirm(String(paymentIntentId), params);
+    if (existingIntent.status === "requires_confirmation") {
+      const intent = await stripe.paymentIntents.confirm(String(resolvedPaymentIntentId), params);
 
-    return res.status(200).json({
-      paymentIntentId: intent.id,
-      status: intent.status
+      return res.status(200).json({
+        paymentIntentId: intent.id || "",
+        payment_intent_id: intent.id || "",
+        status: intent.status || "",
+        clientSecret: intent.client_secret || "",
+        client_secret: intent.client_secret || ""
+      });
+    }
+
+    return res.status(400).json({
+      error: "Payment intent is not ready for confirmation",
+      paymentIntentId: existingIntent.id || "",
+      payment_intent_id: existingIntent.id || "",
+      status: existingIntent.status || "",
+      clientSecret: existingIntent.client_secret || "",
+      client_secret: existingIntent.client_secret || ""
     });
   } catch (error) {
     const statusCode =
@@ -329,9 +384,12 @@ app.post("/api/payments/confirm", async (req, res) => {
 
     return res.status(statusCode).json({
       error: "Failed to confirm payment",
-      message: error.message,
+      message: error.message || "Unknown confirmation error",
       code: error.code || null,
-      type: error.type || null
+      type: error.type || null,
+      paymentIntentId: "",
+      payment_intent_id: "",
+      status: ""
     });
   }
 });
