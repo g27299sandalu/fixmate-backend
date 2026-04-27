@@ -223,12 +223,15 @@ app.get("/health", (req, res) => {
 app.get("/api/payments/config", (req, res) => {
   if (!STRIPE_PUBLISHABLE_KEY) {
     return res.status(500).json({
-      error: "STRIPE_PUBLISHABLE_KEY is not configured"
+      error: "STRIPE_PUBLISHABLE_KEY is not configured",
+      publishableKey: "",
+      publishable_key: ""
     });
   }
 
   return res.status(200).json({
-    publishableKey: STRIPE_PUBLISHABLE_KEY
+    publishableKey: STRIPE_PUBLISHABLE_KEY,
+    publishable_key: STRIPE_PUBLISHABLE_KEY
   });
 });
 
@@ -258,11 +261,18 @@ app.post("/api/payments/create-intent", async (req, res) => {
     }
 
     const intent = await stripe.paymentIntents.create(params);
+    const clientSecret = intent.client_secret || "";
+    const paymentIntentId = intent.id || "";
+    const publishableKey = STRIPE_PUBLISHABLE_KEY || "";
 
     return res.status(201).json({
-      paymentIntentId: intent.id,
-      clientSecret: intent.client_secret,
-      status: intent.status
+      paymentIntentId,
+      payment_intent_id: paymentIntentId,
+      clientSecret,
+      client_secret: clientSecret,
+      status: intent.status,
+      publishableKey,
+      publishable_key: publishableKey
     });
   } catch (error) {
     console.error("Failed to create payment intent", {
@@ -281,7 +291,11 @@ app.post("/api/payments/create-intent", async (req, res) => {
       error: "Failed to create payment intent",
       message: error.message,
       code: error.code || null,
-      type: error.type || null
+      type: error.type || null,
+      clientSecret: "",
+      client_secret: "",
+      publishableKey: STRIPE_PUBLISHABLE_KEY || "",
+      publishable_key: STRIPE_PUBLISHABLE_KEY || ""
     });
   }
 });
