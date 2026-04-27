@@ -29,6 +29,8 @@ STRIPE_PUBLISHABLE_KEY=pk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...   # optional, needed only if webhooks are used
 NODE_ENV=production
 ALLOWED_ORIGINS=https://your-android-webview-origin.com,https://your-frontend-domain.com
+RATE_LIMIT_WINDOW_MINUTES=15
+RATE_LIMIT_MAX_REQUESTS=100
 ```
 
 Notes:
@@ -58,6 +60,20 @@ Health check:
 
 ```http
 GET /health
+```
+
+Get publishable key for mobile app:
+
+```http
+GET /api/payments/config
+```
+
+Expected response:
+
+```json
+{
+   "publishableKey": "pk_test_..."
+}
 ```
 
 Create payment intent:
@@ -145,13 +161,14 @@ Then test `http://localhost:8080/health`.
 
 `500 Failed to create payment intent`
 
-- Ensure `amount` is an integer in minor units (for USD, cents).
+- Ensure `amount` is a positive number (minor units like `1500` or decimal major units like `15.00`).
 - Check Railway logs for Stripe error details.
 
 `Webhook signature verification failed`
 
 - `STRIPE_WEBHOOK_SECRET` is missing or incorrect.
 - Ensure raw body is sent (already handled in backend route).
+- Webhook endpoint can be either `/api/payments/webhook` or `/webhook/stripe`.
 
 ## 8) Production Checklist
 
