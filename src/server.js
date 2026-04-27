@@ -143,6 +143,23 @@ function extractPaymentIntentId(value) {
   return "";
 }
 
+function toAppPaymentStatus(stripeStatus) {
+  if (stripeStatus === "succeeded") {
+    return "COMPLETED";
+  }
+  if (stripeStatus === "processing" || stripeStatus === "requires_capture") {
+    return "PROCESSING";
+  }
+  if (stripeStatus === "canceled") {
+    return "FAILED";
+  }
+  return "PENDING";
+}
+
+function isSuccessfulStripeStatus(stripeStatus) {
+  return ["succeeded", "processing", "requires_capture"].includes(stripeStatus);
+}
+
 if (!STRIPE_SECRET_KEY) {
   console.error("Missing STRIPE_SECRET_KEY environment variable.");
   process.exit(1);
@@ -258,7 +275,7 @@ app.get("/api/payments/config", (req, res) => {
 
 app.post("/api/payments/create-intent", async (req, res) => {
   try {
-    const { amount, currency = "usd", metadata = {}, customerId } = req.body || {};
+    const { amount, currency = "usd", metadata = {}, customerId, bookingId } = req.body || {};
     const normalizedCurrency = String(currency).toLowerCase();
     const normalizedAmount = normalizeAmount(amount, normalizedCurrency);
     const normalizedMetadata = normalizeMetadata(metadata);
@@ -287,11 +304,16 @@ app.post("/api/payments/create-intent", async (req, res) => {
     const publishableKey = STRIPE_PUBLISHABLE_KEY || "";
 
     return res.status(201).json({
+      success: true,
+      message: "Payment intent created successfully",
       paymentIntentId,
       payment_intent_id: paymentIntentId,
       clientSecret,
       client_secret: clientSecret,
       status: intent.status,
+      paymentStatus: toAppPaymentStatus(intent.status),
+      bookingStatus: "PAYMENT_PENDING",
+      bookingId: bookingId || "",
       publishableKey,
       publishable_key: publishableKey
     });
@@ -309,10 +331,13 @@ app.post("/api/payments/create-intent", async (req, res) => {
         : 500;
 
     return res.status(statusCode).json({
+      success: false,
       error: "Failed to create payment intent",
-      message: error.message,
+      message: error.message || "Failed to create payment intent",
       code: error.code || null,
       type: error.type || null,
+      paymentStatus: "FAILED",
+      bookingStatus: "PAYMENT_PENDING",
       clientSecret: "",
       client_secret: "",
       publishableKey: STRIPE_PUBLISHABLE_KEY || "",
@@ -323,7 +348,14 @@ app.post("/api/payments/create-intent", async (req, res) => {
 
 app.post("/api/payments/confirm", async (req, res) => {
   try {
-    const { paymentIntentId, payment_intent_id, clientSecret, client_secret, paymentMethodId } = req.body || {};
+    const {
+      paymentIntentId,
+      payment_intent_id,
+      clientSecret,
+      client_secret,
+      paymentMethodId,
+      bookingId
+    } = req.body || {};
     const resolvedPaymentIntentId =
       extractPaymentIntentId(paymentIntentId) ||
       extractPaymentIntentId(payment_intent_id) ||
@@ -332,20 +364,32 @@ app.post("/api/payments/confirm", async (req, res) => {
 
     if (!resolvedPaymentIntentId) {
       return res.status(400).json({
+        success: false,
         error: "paymentIntentId or clientSecret is required",
+        message: "paymentIntentId or clientSecret is required",
         paymentIntentId: "",
         payment_intent_id: "",
+        paymentStatus: "FAILED",
+        bookingStatus: "PAYMENT_PENDING",
+        bookingId: bookingId || "",
         status: ""
       });
     }
 
     const existingIntent = await stripe.paymentIntents.retrieve(String(resolvedPaymentIntentId));
 
-    if (["succeeded", "processing", "requires_capture"].includes(existingIntent.status)) {
+    if (isSuccessfulStripeStatus(existingIntent.status)) {
+      const mappedPaymentStatus = toAppPaymentStatus(existingIntent.status);
+
       return res.status(200).json({
+        success: true,
+        message: "Payment confirmed successfully",
         paymentIntentId: existingIntent.id || "",
         payment_intent_id: existingIntent.id || "",
         status: existingIntent.status || "",
+        paymentStatus: mappedPaymentStatus,
+        bookingStatus: "COMPLETED",
+        bookingId: bookingId || "",
         clientSecret: existingIntent.client_secret || "",
         client_secret: existingIntent.client_secret || ""
       });
@@ -358,20 +402,34 @@ app.post("/api/payments/confirm", async (req, res) => {
 
     if (existingIntent.status === "requires_confirmation") {
       const intent = await stripe.paymentIntents.confirm(String(resolvedPaymentIntentId), params);
+      const confirmedSuccessfully = isSuccessfulStripeStatus(intent.status);
+      const mappedPaymentStatus = toAppPaymentStatus(intent.status);
 
       return res.status(200).json({
+        success: confirmedSuccessfully,
+        message: confirmedSuccessfully
+          ? "Payment confirmed successfully"
+          : "Payment confirmation requires additional action",
         paymentIntentId: intent.id || "",
         payment_intent_id: intent.id || "",
         status: intent.status || "",
+        paymentStatus: mappedPaymentStatus,
+        bookingStatus: confirmedSuccessfully ? "COMPLETED" : "PAYMENT_PENDING",
+        bookingId: bookingId || "",
         clientSecret: intent.client_secret || "",
         client_secret: intent.client_secret || ""
       });
     }
 
     return res.status(400).json({
+      success: false,
       error: "Payment intent is not ready for confirmation",
+      message: "Payment intent is not ready for confirmation",
       paymentIntentId: existingIntent.id || "",
       payment_intent_id: existingIntent.id || "",
+      paymentStatus: toAppPaymentStatus(existingIntent.status),
+      bookingStatus: "PAYMENT_PENDING",
+      bookingId: bookingId || "",
       status: existingIntent.status || "",
       clientSecret: existingIntent.client_secret || "",
       client_secret: existingIntent.client_secret || ""
@@ -383,29 +441,45 @@ app.post("/api/payments/confirm", async (req, res) => {
         : 500;
 
     return res.status(statusCode).json({
+      success: false,
       error: "Failed to confirm payment",
       message: error.message || "Unknown confirmation error",
       code: error.code || null,
       type: error.type || null,
       paymentIntentId: "",
       payment_intent_id: "",
+      paymentStatus: "FAILED",
+      bookingStatus: "PAYMENT_PENDING",
       status: ""
     });
   }
 });
 
 app.post("/api/payments/cash", (req, res) => {
-  const { amount, currency = "usd", jobId, customerId, note = "" } = req.body || {};
+  const { amount, currency = "usd", jobId, bookingId, customerId, note = "" } = req.body || {};
   const normalizedCurrency = String(currency).toLowerCase();
   const normalizedAmount = normalizeAmount(amount, normalizedCurrency);
 
   if (!Number.isInteger(normalizedAmount) || normalizedAmount <= 0) {
     return res.status(400).json({
-      error: "Invalid amount. Send positive number (minor units or decimal major units)."
+      success: false,
+      error: "Invalid amount. Send positive number (minor units or decimal major units).",
+      message: "Invalid amount",
+      paymentStatus: "FAILED",
+      bookingStatus: "PAYMENT_PENDING"
     });
   }
 
+  const cashPaymentId = `cash_${Date.now()}`;
+
   return res.status(201).json({
+    success: true,
+    message: "Cash payment recorded successfully",
+    paymentId: cashPaymentId,
+    payment_id: cashPaymentId,
+    paymentStatus: "COMPLETED",
+    bookingStatus: "COMPLETED",
+    bookingId: bookingId || "",
     method: "cash",
     status: "pending_collection",
     amount: normalizedAmount,
