@@ -1,0 +1,21 @@
+{
+  "name": "fixmate-payment-backend",
+  "version": "1.0.0",
+  "description": "FixMate payment backend for Stripe + Railway",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "stripe": "^17.7.0"
+  }
+}

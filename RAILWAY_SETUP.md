@@ -1,260 +1,161 @@
-# Railway Deployment Setup for FixMate Payment Backend
+# Railway Setup Guide - FixMate Payment Backend
 
-## ⚠️ IMPORTANT: Your Stripe Key Issue
+This guide matches the backend in this repository.
 
-The key you provided (`mk_1SdSekKSL3YUt4e6eC5OGeCm`) is **NOT** a valid Stripe secret key.
+## 0) Rotate Exposed Keys
 
-- ❌ `mk_` prefix = Restricted API key (limited permissions)
-- ✅ You need keys starting with:
-  - `sk_test_` = Secret key for testing
-  - `pk_test_` = Publishable key for testing
+Because Stripe keys were shared in chat, rotate/revoke them now.
 
-## 🔑 Step 1: Get Correct Stripe API Keys
+1. Stripe Dashboard -> Developers -> API keys.
+2. Revoke exposed test keys.
+3. Create fresh keys:
+    - `sk_test_...` for backend
+    - `pk_test_...` for mobile/web client
 
-1. Go to: https://dashboard.stripe.com/test/apikeys
-2. You'll see TWO keys:
+## 1) Connect This Repo To Railway
 
-   **Publishable key** (safe to use in apps)
-   ```
-   pk_test_51QRkvyKSL3YUt4e6...  (starts with pk_test_)
-   ```
+1. Push repository to GitHub.
+2. In Railway, click New Project -> Deploy from GitHub repo.
+3. Select this repository.
+4. Railway builds Node app automatically from `package.json`.
 
-   **Secret key** (NEVER share publicly - only on backend)
-   ```
-   sk_test_51QRkvyKSL3YUt4e6...  (starts with sk_test_)
-   ```
+## 2) Configure Railway Variables
 
-3. Click "Reveal test key" to see the full secret key
-4. Copy BOTH keys - you'll need them for Railway
+Add these variables in Railway -> Service -> Variables:
 
----
-
-## 🚂 Step 2: Set Environment Variables in Railway
-
-### Option A: Via Railway Dashboard (Recommended)
-
-1. Go to https://railway.app
-2. Open your project: `magnificent-fulfillment-firebaseserviceaccount`
-3. Click on your service
-4. Go to **Variables** tab
-5. Click **+ New Variable** for each:
-
-#### Add These 3 Variables:
-
-**Variable 1: STRIPE_SECRET_KEY**
-```
-Name: STRIPE_SECRET_KEY
-Value: sk_test_51QRkvyKSL3YUt4e6... (paste your actual secret key)
-```
-
-**Variable 2: STRIPE_PUBLISHABLE_KEY**
-```
-Name: STRIPE_PUBLISHABLE_KEY
-Value: pk_test_51QRkvyKSL3YUt4e6... (paste your actual publishable key)
-```
-
-**Variable 3: FIREBASE_SERVICE_ACCOUNT**
-```
-Name: FIREBASE_SERVICE_ACCOUNT
-Value: (see Step 3 below for how to get this)
-```
-
-6. Click **Deploy** after adding all variables
-
----
-
-## 🔥 Step 3: Get Firebase Service Account JSON
-
-### 3.1 Download from Firebase Console
-
-1. Go to: https://console.firebase.google.com
-2. Select your FixMate project
-3. Click the **gear icon ⚙️** → **Project settings**
-4. Go to **Service accounts** tab
-5. Click **Generate new private key**
-6. Click **Generate key** (downloads a JSON file)
-
-### 3.2 Convert JSON to Single Line for Railway
-
-The downloaded file looks like this (formatted):
-```json
-{
-  "type": "service_account",
-  "project_id": "fixmate-12345",
-  "private_key_id": "abc123...",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nXXXXX...\n-----END PRIVATE KEY-----\n",
-  "client_email": "firebase-adminsdk-xxxxx@fixmate-12345.iam.gserviceaccount.com",
-  "client_id": "123456789",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-xxxxx%40fixmate-12345.iam.gserviceaccount.com"
-}
-```
-
-**Convert to ONE LINE** (remove all line breaks):
-```json
-{"type":"service_account","project_id":"fixmate-12345","private_key_id":"abc123...","private_key":"-----BEGIN PRIVATE KEY-----\nXXXXX...\n-----END PRIVATE KEY-----\n","client_email":"firebase-adminsdk-xxxxx@fixmate-12345.iam.gserviceaccount.com","client_id":"123456789","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_x509_cert_url":"https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-xxxxx%40fixmate-12345.iam.gserviceaccount.com"}
-```
-
-### 3.3 Tools to Convert to Single Line
-
-**Method 1: Online Tool**
-1. Go to: https://jsonformatter.org/json-minify
-2. Paste your Firebase JSON
-3. Click "Minify JSON"
-4. Copy the result
-
-**Method 2: VS Code**
-1. Open the downloaded JSON file
-2. Press `Ctrl+A` to select all
-3. Press `Ctrl+H` to find and replace
-4. Find: `\n` (with regex enabled)
-5. Replace with: (nothing)
-6. Copy the result
-
-**Method 3: Command Line**
 ```bash
-# On Windows PowerShell
-Get-Content firebase-service-account.json -Raw | ConvertFrom-Json | ConvertTo-Json -Compress
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_PUBLISHABLE_KEY=pk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...   # optional, needed only if webhooks are used
+NODE_ENV=production
+ALLOWED_ORIGINS=https://your-android-webview-origin.com,https://your-frontend-domain.com
 ```
 
----
+Notes:
 
-## 🚀 Step 4: Redeploy on Railway
+- During testing only, `ALLOWED_ORIGINS=*` is acceptable.
+- Do not quote values unless value itself includes quotes.
 
-After adding all environment variables:
+## 3) Deploy
 
-1. Railway will **auto-deploy** when you save variables
-2. Or click **Deploy** manually
-3. Wait 1-2 minutes for deployment
+1. Railway auto-deploys after pushing code or changing variables.
+2. Open Deployments tab and ensure latest deployment is successful.
+3. In Logs, confirm startup line:
 
-### Check Deployment Status:
-1. Go to **Deployments** tab
-2. Watch the build logs
-3. Should see: `✅ FixMate Payment Backend running on port XXXX`
-
----
-
-## ✅ Step 5: Test Your Backend
-
-### Test 1: Health Check
-
-Open in browser:
-```
-https://magnificent-fulfillment-firebaseserviceaccount.up.railway.app/health
+```text
+FixMate payment backend running on port <port>
 ```
 
-Should return:
-```json
+## 4) Verify Endpoints
+
+Base URL example:
+
+```text
+https://<your-service>.up.railway.app
+```
+
+Health check:
+
+```http
+GET /health
+```
+
+Create payment intent:
+
+```http
+POST /api/payments/create-intent
+Content-Type: application/json
+
 {
-  "status": "OK",
-  "message": "FixMate Payment Backend is running",
-  "timestamp": "2025-12-15T10:30:00.000Z"
+   "amount": 1500,
+   "currency": "usd",
+   "metadata": {
+      "jobId": "JOB_1001",
+      "customerId": "CUS_42"
+   }
 }
 ```
 
-### Test 2: From Android App
+Expected response includes:
 
-1. Your Android app is already configured with the Railway URL ✅
-2. Open app and try to make a payment
-3. Check Railway logs for requests:
-   - Go to Railway Dashboard
-   - Click your service
-   - Click **Logs** tab
-   - Watch for incoming requests
+```json
+{
+   "paymentIntentId": "pi_...",
+   "clientSecret": "pi_..._secret_...",
+   "status": "requires_payment_method"
+}
+```
 
----
+Confirm payment:
 
-## 📋 Summary Checklist
+```http
+POST /api/payments/confirm
+Content-Type: application/json
 
-Before testing payment:
+{
+   "paymentIntentId": "pi_...",
+   "paymentMethodId": "pm_..."
+}
+```
 
-- [ ] Got correct Stripe secret key (starts with `sk_test_`)
-- [ ] Got correct Stripe publishable key (starts with `pk_test_`)
-- [ ] Downloaded Firebase service account JSON
-- [ ] Converted Firebase JSON to single line (no line breaks)
-- [ ] Added `STRIPE_SECRET_KEY` to Railway variables
-- [ ] Added `STRIPE_PUBLISHABLE_KEY` to Railway variables
-- [ ] Added `FIREBASE_SERVICE_ACCOUNT` to Railway variables
-- [ ] Railway deployment succeeded
-- [ ] `/health` endpoint returns OK
-- [ ] Android app shows no connection errors
+Cash fallback:
 
----
+```http
+POST /api/payments/cash
+Content-Type: application/json
 
-## 🐛 Common Issues
+{
+   "amount": 1500,
+   "currency": "usd",
+   "jobId": "JOB_1001"
+}
+```
 
-### Issue 1: "Payment service not found"
-**Cause**: Backend not running or wrong URL  
-**Fix**:
-- Check Railway deployment status
-- Verify URL in Android app matches Railway URL
-- Test `/health` endpoint in browser
+## 5) Optional: Stripe Webhook
 
-### Issue 2: "Invalid API key"
-**Cause**: Wrong Stripe key or not set in Railway  
-**Fix**:
-- Use `sk_test_` key, not `mk_` or `rk_`
-- Verify key is set in Railway variables
-- Redeploy after setting variables
+If you process async events:
 
-### Issue 3: "Firebase initialization error"
-**Cause**: Invalid or malformed JSON  
-**Fix**:
-- Ensure JSON is ONE LINE (no line breaks except in `private_key` field)
-- Validate JSON at https://jsonlint.com
-- Re-download from Firebase if needed
+1. In Stripe Dashboard, create webhook endpoint:
+    - `https://<your-service>.up.railway.app/api/payments/webhook`
+2. Copy webhook signing secret (`whsec_...`).
+3. Set `STRIPE_WEBHOOK_SECRET` in Railway variables.
 
-### Issue 4: "CORS error" in app
-**Cause**: Railway URL not in CORS whitelist  
-**Fix**: Already handled - CORS is set to allow all origins in backend
+## 6) Local Test Before Railway (Recommended)
 
----
+```bash
+npm install
+cp .env.example .env
+# set STRIPE_SECRET_KEY in .env
+npm start
+```
 
-## 📞 Getting Help
+Then test `http://localhost:8080/health`.
 
-If you still see "Payment service not found":
+## 7) Troubleshooting
 
-1. **Check Railway Logs**:
-   - Railway Dashboard → Your Service → Logs
-   - Look for errors during startup
+`Invalid API Key provided`
 
-2. **Check Android Logs** (Logcat):
-   - Filter by "Payment" or "HTTP"
-   - Look for detailed error messages
+- `STRIPE_SECRET_KEY` is wrong or revoked.
+- Use only `sk_test_...` for test mode.
 
-3. **Verify Environment Variables**:
-   - Railway Dashboard → Your Service → Variables
-   - Make sure all 3 variables are set
-   - Keys should NOT have quotes around them
+`CORS blocked`
 
----
+- Add your app origin to `ALLOWED_ORIGINS`.
+- For debugging, temporarily set `ALLOWED_ORIGINS=*`.
 
-## 🎯 What the Backend Does Now
+`500 Failed to create payment intent`
 
-After this update, your backend has these working endpoints:
+- Ensure `amount` is an integer in minor units (for USD, cents).
+- Check Railway logs for Stripe error details.
 
-1. **GET `/health`** - Check if backend is running
-2. **POST `/api/payments/create-intent`** - Create Stripe payment
-3. **POST `/api/payments/confirm`** - Confirm card payment
-4. **POST `/api/payments/cash`** - Process cash payment
+`Webhook signature verification failed`
 
-These match exactly what your Android app expects! 🎉
+- `STRIPE_WEBHOOK_SECRET` is missing or incorrect.
+- Ensure raw body is sent (already handled in backend route).
 
----
+## 8) Production Checklist
 
-## 🔐 Security Note
-
-⚠️ **NEVER commit `.env` file to Git!**
-
-The `.env` file should be in your `.gitignore`. Railway uses its own environment variables system, so you don't need to deploy the `.env` file.
-
-In Railway:
-- Variables are encrypted
-- Only accessible to your service
-- Not visible in Git repository
-
----
-
-**Next Step**: Follow Step 1 to get your correct Stripe keys, then add all 3 environment variables to Railway! 🚀
+1. Switch to `sk_live_...` and `pk_live_...` only when ready.
+2. Restrict `ALLOWED_ORIGINS` to exact domains.
+3. Never store secret keys in app source or mobile app.
+4. Keep `.env` local only; use Railway Variables in deployment.
