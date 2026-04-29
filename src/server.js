@@ -5,6 +5,8 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const Stripe = require("stripe");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 
@@ -16,6 +18,7 @@ const RATE_LIMIT_WINDOW_MINUTES = Number(process.env.RATE_LIMIT_WINDOW_MINUTES) 
 const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS) || 100;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const FIREBASE_SERVICE_ACCOUNT_JSON = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
 const ZERO_DECIMAL_CURRENCIES = new Set([
   "bif",
@@ -172,6 +175,22 @@ function resolveFirebaseServiceAccount() {
     } catch (error) {
       console.error("FIREBASE_SERVICE_ACCOUNT_JSON is invalid JSON");
       return null;
+    }
+  }
+
+  const candidatePaths = [
+    GOOGLE_APPLICATION_CREDENTIALS,
+    path.join(process.cwd(), "firebase-service-account.json")
+  ].filter(Boolean);
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      if (fs.existsSync(candidatePath)) {
+        const fileContent = fs.readFileSync(candidatePath, "utf8");
+        return JSON.parse(fileContent);
+      }
+    } catch (error) {
+      console.error(`Failed to read Firebase credentials from ${candidatePath}: ${error.message}`);
     }
   }
 
@@ -407,12 +426,24 @@ app.post("/api/payments/create-intent", async (req, res) => {
   try {
     const {
       amount,
-      currency = "usd",
+      currency = "lkr",
       metadata = {},
       customerId,
       providerId,
       bookingId
     } = req.body || {};
+    
+    // Validate that amount is provided
+    if (amount === null || amount === undefined || amount === "") {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid payment request. Please check booking details and try again.",
+        message: "Amount is required",
+        paymentStatus: "FAILED",
+        bookingStatus: "PAYMENT_PENDING"
+      });
+    }
+
     const normalizedCurrency = String(currency).toLowerCase();
     const normalizedAmount = normalizeAmount(amount, normalizedCurrency);
     const normalizedMetadata = normalizeMetadata(metadata);
@@ -420,7 +451,11 @@ app.post("/api/payments/create-intent", async (req, res) => {
 
     if (!Number.isInteger(normalizedAmount) || normalizedAmount <= 0) {
       return res.status(400).json({
-        error: "Invalid amount. Send a positive amount like 1500, 15.00, or LKR 51,000.00."
+        success: false,
+        error: "Invalid payment request. Please check booking details and try again.",
+        message: "Invalid amount. Send a positive amount like 1500, 15.00, or LKR 51,000.00.",
+        paymentStatus: "FAILED",
+        bookingStatus: "PAYMENT_PENDING"
       });
     }
 
@@ -466,7 +501,10 @@ app.post("/api/payments/create-intent", async (req, res) => {
       type: error.type,
       code: error.code,
       message: error.message,
-      requestId: error.requestId
+      requestId: error.requestId,
+      amount: amount,
+      currency: currency,
+      bookingId: bookingId
     });
 
     const statusCode =
@@ -476,7 +514,7 @@ app.post("/api/payments/create-intent", async (req, res) => {
 
     return res.status(statusCode).json({
       success: false,
-      error: "Failed to create payment intent",
+      error: "Invalid payment request. Please check booking details and try again.",
       message: error.message || "Failed to create payment intent",
       code: error.code || null,
       type: error.type || null,
@@ -502,6 +540,7 @@ app.post("/api/payments/confirm", async (req, res) => {
       customerId,
       providerId
     } = req.body || {};
+    
     const resolvedPaymentIntentId =
       extractPaymentIntentId(paymentIntentId) ||
       extractPaymentIntentId(payment_intent_id) ||
@@ -511,7 +550,7 @@ app.post("/api/payments/confirm", async (req, res) => {
     if (!resolvedPaymentIntentId) {
       return res.status(400).json({
         success: false,
-        error: "paymentIntentId or clientSecret is required",
+        error: "Invalid payment request. Please check booking details and try again.",
         message: "paymentIntentId or clientSecret is required",
         paymentIntentId: "",
         payment_intent_id: "",
@@ -622,9 +661,16 @@ app.post("/api/payments/confirm", async (req, res) => {
         ? error.statusCode
         : 500;
 
+    console.error("Failed to confirm payment", {
+      type: error.type,
+      code: error.code,
+      message: error.message,
+      statusCode: statusCode
+    });
+
     return res.status(statusCode).json({
       success: false,
-      error: "Failed to confirm payment",
+      error: "Invalid payment request. Please check booking details and try again.",
       message: error.message || "Unknown confirmation error",
       code: error.code || null,
       type: error.type || null,
