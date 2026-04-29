@@ -430,8 +430,9 @@ app.get("/api/payments/config", (req, res) => {
   });
 });
 
- app.post("/api/payments/create-intent", async (req, res) => {
+app.post("/api/payments/create-intent", async (req, res) => {
   try {
+    const requestBody = req.body || {};
     const {
       amount,
       currency = "lkr",
@@ -439,7 +440,7 @@ app.get("/api/payments/config", (req, res) => {
       customerId,
       providerId,
       bookingId
-    } = req.body || {};
+    } = requestBody;
     
     // Validate that amount is provided
     if (amount === null || amount === undefined || amount === "") {
@@ -510,9 +511,9 @@ app.get("/api/payments/config", (req, res) => {
       code: error.code,
       message: error.message,
       requestId: error.requestId,
-      amount: amount,
-      currency: currency,
-      bookingId: bookingId
+      amount: req.body?.amount,
+      currency: req.body?.currency,
+      bookingId: req.body?.bookingId
     });
 
     const statusCode =
