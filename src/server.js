@@ -307,13 +307,21 @@ async function syncPaymentToFirestore({
 }
 
 if (!STRIPE_SECRET_KEY) {
-  console.error("Missing STRIPE_SECRET_KEY environment variable.");
+  console.error("FATAL: Missing STRIPE_SECRET_KEY environment variable.");
+  console.error("Please set STRIPE_SECRET_KEY in Railway variables.");
   process.exit(1);
 }
 
-const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  apiVersion: "2024-06-20"
-});
+let stripe;
+try {
+  stripe = new Stripe(STRIPE_SECRET_KEY, {
+    apiVersion: "2024-06-20"
+  });
+  console.log("Stripe initialized successfully");
+} catch (error) {
+  console.error("FATAL: Failed to initialize Stripe", error.message);
+  process.exit(1);
+}
 
 const allowedOriginsRaw = process.env.ALLOWED_ORIGINS || "*";
 const allowedOrigins = allowedOriginsRaw
@@ -743,6 +751,47 @@ app.post("/api/payments/cash", (req, res) => {
     });
 });
 
+app.post("/api/test/stripe-connection", async (req, res) => {
+  try {
+    if (!STRIPE_SECRET_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "STRIPE_SECRET_KEY is not configured",
+        STRIPE_SECRET_KEY_SET: false
+      });
+    }
+
+    const testAmount = 100;
+    const testCurrency = "lkr";
+    
+    console.log("Testing Stripe connection with amount:", testAmount, "currency:", testCurrency);
+    
+    const intent = await stripe.paymentIntents.create({
+      amount: testAmount,
+      currency: testCurrency,
+      automatic_payment_methods: { enabled: true }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Stripe connection OK",
+      testPaymentIntentId: intent.id,
+      STRIPE_SECRET_KEY_SET: true,
+      STRIPE_PUBLISHABLE_KEY_SET: Boolean(STRIPE_PUBLISHABLE_KEY),
+      stripeVersion: "2024-06-20"
+    });
+  } catch (error) {
+    console.error("Stripe connection test failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      error: "Stripe connection failed",
+      message: error.message,
+      code: error.code,
+      type: error.type
+    });
+  }
+});
+
 app.use((error, req, res, next) => {
   if (error && error.message && error.message.includes("CORS")) {
     return res.status(403).json({
@@ -756,5 +805,13 @@ app.use((error, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`FixMate payment backend running on port ${PORT}`);
+  console.log("================================================");
+  console.log(`✓ FixMate Payment Backend running on port ${PORT}`);
+  console.log(`✓ Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`✓ Stripe initialized: Yes`);
+  console.log(`✓ STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY ? "✓ Set" : "✗ Missing"}`);
+  console.log(`✓ Firestore: ${getFirestore() ? "Connected" : "Not configured"}`);
+  console.log("================================================");
+  console.log("Ready to accept payments!");
+  console.log(`Test: curl http://localhost:${PORT}/health`);
 });
