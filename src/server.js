@@ -422,7 +422,7 @@ app.get("/api/payments/config", (req, res) => {
   });
 });
 
-app.post("/api/payments/create-intent", async (req, res) => {
+ app.post("/api/payments/create-intent", async (req, res) => {
   try {
     const {
       amount,
